@@ -1,0 +1,4 @@
+# 忽略本地包含绝对路径的 Windows 快捷方式与系统临时文件
+*.lnk
+.DS_Store
+Thumbs.db

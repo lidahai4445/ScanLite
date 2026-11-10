@@ -1,0 +1,1319 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ScanLite Pro · 超清图片转扫描件工作台</title>
+<!-- jsPDF：用于标准 A4 多页高清 PDF 导出 -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<!-- OpenCV.js（异步加载，配合内置多策略视觉引擎实现高精度纸张寻边） -->
+<script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="window.cvReady=true"></script>
+<style>
+  :root{
+    --bg:#f4f6fb; --card:#ffffff; --line:#e4e8f2; --text:#1a2130; --muted:#747d94;
+    --primary:#3b6cf5; --primary-hover:#2957df; --primary-soft:#ebf1ff;
+    --success:#12a150; --success-soft:#e8f8ef; --danger:#e5484d; --radius:14px;
+    --shadow:0 1px 3px rgba(18,26,52,.04),0 6px 20px rgba(18,26,52,.05);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{font-family:"PingFang SC","Microsoft YaHei","Segoe UI",system-ui,sans-serif;background:var(--bg);color:var(--text);font-size:14px;display:flex;flex-direction:column;user-select:none}
+  button,input,select{font:inherit;color:inherit;border:none;background:none}
+  button{cursor:pointer}
+
+  /* 顶部导航栏 */
+  header{height:62px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 24px;background:var(--card);border-bottom:1px solid var(--line)}
+  .brand{display:flex;align-items:center;gap:11px;font-weight:700;font-size:17px}
+  .logo{width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#5b8cff,#3b6cf5);display:grid;place-items:center;color:#fff;box-shadow:0 3px 10px rgba(59,108,245,.28)}
+  .badge{font-weight:500;font-size:12px;color:var(--success);background:var(--success-soft);padding:3px 9px;border-radius:20px;margin-left:4px}
+  .actions{display:flex;align-items:center;gap:10px}
+  .btn{height:36px;padding:0 15px;border-radius:10px;border:1px solid var(--line);background:#fff;display:inline-flex;align-items:center;gap:6px;font-weight:500;transition:.15s}
+  .btn:hover:not(:disabled){border-color:#c6cede;background:#f9fafe}
+  .btn.primary{background:var(--primary);border-color:var(--primary);color:#fff;box-shadow:0 2px 8px rgba(59,108,245,.24)}
+  .btn.primary:hover:not(:disabled){background:var(--primary-hover)}
+  .btn.soft{background:var(--primary-soft);border-color:transparent;color:var(--primary)}
+  .btn.soft:hover:not(:disabled){background:#dce6ff}
+  .btn:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+
+  /* 三栏主布局 */
+  main{flex:1;min-height:0;display:grid;grid-template-columns:210px 1fr 330px;gap:16px;padding:16px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+  .card-hd{height:46px;flex:none;display:flex;align-items:center;justify-content:space-between;padding:0 14px;border-bottom:1px solid var(--line);font-weight:600;gap:6px}
+  .card-hd .sub{font-weight:400;color:var(--muted);font-size:12px}
+  .card-bd{flex:1;min-height:0;position:relative}
+
+  /* 左栏：页面列表与排序 */
+  .pages{padding:12px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+  .thumb{position:relative;border:2px solid transparent;border-radius:11px;padding:6px;background:#f7f8fc;cursor:pointer;transition:.15s}
+  .thumb:hover{background:#eef1f8}
+  .thumb.active{border-color:var(--primary);background:var(--primary-soft)}
+  .thumb img{width:100%;height:112px;object-fit:contain;display:block;border-radius:6px;background:#fff}
+  .thumb .idx{position:absolute;left:10px;top:10px;background:rgba(26,33,48,.78);color:#fff;font-size:11px;padding:1px 7px;border-radius:20px;font-weight:600}
+  .thumb .bar{position:absolute;right:8px;top:8px;display:none;gap:4px}
+  .thumb:hover .bar{display:flex}
+  .ico-btn{width:22px;height:22px;border-radius:6px;background:rgba(255,255,255,.94);color:var(--text);box-shadow:0 1px 4px rgba(0,0,0,.12);display:grid;place-items:center;font-size:12px}
+  .ico-btn:hover{background:var(--primary);color:#fff}
+  .ico-btn.del:hover{background:var(--danger);color:#fff}
+  .thumb .name{font-size:11px;color:var(--muted);margin-top:5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:center}
+  .add{border:1.5px dashed #c8d0e0;border-radius:11px;height:66px;color:var(--muted);display:grid;place-items:center;font-weight:500;transition:.15s;flex:none}
+  .add:hover{border-color:var(--primary);color:var(--primary);background:var(--primary-soft)}
+
+  /* 中栏：原图裁切 + 扫描件预览 */
+  .stage{display:grid;grid-template-columns:1fr 1fr;gap:16px;min-height:0}
+  .canvas-wrap{position:absolute;inset:0;background:
+      linear-gradient(45deg,#f1f3f9 25%,transparent 25%,transparent 75%,#f1f3f9 75%),
+      linear-gradient(45deg,#f1f3f9 25%,transparent 25%,transparent 75%,#f1f3f9 75%);
+      background-size:20px 20px;background-position:0 0,10px 10px}
+  #editor{display:block;touch-action:none}
+  .preview{display:flex;align-items:center;justify-content:center;padding:18px;overflow:auto}
+  .preview canvas{max-width:100%;max-height:100%;box-shadow:0 3px 10px rgba(15,23,42,.08),0 14px 36px rgba(15,23,42,.12);background:#fff;border-radius:2px;cursor:zoom-in;transition:box-shadow .15s}
+  .preview.zoomed{align-items:flex-start;justify-content:flex-start}
+  .preview.zoomed canvas{max-width:none;max-height:none;cursor:zoom-out}
+  .tools{display:flex;gap:5px;align-items:center;flex-wrap:wrap}
+  .mini{height:27px;padding:0 9px;border-radius:8px;font-size:12px;color:var(--text);border:1px solid var(--line);background:#fff;display:inline-flex;align-items:center;gap:4px;font-weight:500;transition:.15s}
+  .mini:hover{color:var(--primary);border-color:var(--primary);background:var(--primary-soft)}
+  .mini.accent{background:var(--primary-soft);color:var(--primary);border-color:#cedbff}
+  .mini.accent:hover{background:var(--primary);color:#fff}
+  .mini.active{background:var(--primary);color:#fff;border-color:var(--primary)}
+
+  /* 拖拽导入空状态 */
+  .drop{position:absolute;inset:16px;border:2px dashed #c8d0e0;border-radius:12px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;color:var(--muted);text-align:center;background:#fbfcff;transition:.15s;padding:20px}
+  .drop.over{border-color:var(--primary);background:var(--primary-soft);color:var(--primary)}
+  .drop .ico{width:64px;height:64px;border-radius:18px;background:var(--primary-soft);color:var(--primary);display:grid;place-items:center}
+  .drop h3{color:var(--text);font-size:16px}
+  .drop .row-btns{display:flex;gap:10px;margin-top:4px;flex-wrap:wrap;justify-content:center}
+  .hidden{display:none!important}
+
+  /* 右栏：参数面板 */
+  .settings{padding:15px;overflow:auto;display:flex;flex-direction:column;gap:16px}
+  .group-title{font-size:12px;font-weight:600;color:var(--muted);margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+  .presets{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .preset{border:1px solid var(--line);border-radius:10px;padding:8px 10px;text-align:left;transition:.15s;background:#fff}
+  .preset b{display:block;font-size:13px;margin-bottom:2px}
+  .preset span{font-size:11px;color:var(--muted)}
+  .preset:hover{border-color:var(--primary)}
+  .preset.active{border-color:var(--primary);background:var(--primary-soft)}
+  .seg{display:flex;background:#eff2f8;border-radius:10px;padding:3px;gap:2px}
+  .seg button{flex:1;height:29px;border-radius:8px;font-size:12px;color:var(--muted);transition:.15s}
+  .seg button.active{background:#fff;color:var(--text);font-weight:600;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+  .slider{margin-bottom:12px}
+  .slider:last-child{margin-bottom:0}
+  .slider .row{display:flex;justify-content:space-between;font-size:12.5px;margin-bottom:4px}
+  .slider .row em{font-style:normal;color:var(--primary);font-weight:600;font-variant-numeric:tabular-nums}
+  input[type=range]{width:100%;appearance:none;height:5px;border-radius:4px;background:#e3e7f1;outline:none}
+  input[type=range]::-webkit-slider-thumb{appearance:none;width:15px;height:15px;border-radius:50%;background:#fff;border:2.5px solid var(--primary);box-shadow:0 1px 4px rgba(0,0,0,.18);cursor:pointer}
+  input[type=range]::-moz-range-thumb{width:12px;height:12px;border-radius:50%;background:#fff;border:2.5px solid var(--primary);cursor:pointer}
+  .tip{font-size:11.5px;color:var(--muted);line-height:1.6;background:#f7f9fd;border:1px solid var(--line);border-radius:10px;padding:9px 11px}
+
+  .toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:#1a2130;color:#fff;padding:10px 18px;border-radius:10px;opacity:0;transition:.25s;pointer-events:none;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.18);z-index:99}
+  .toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media (max-width:1160px){main{grid-template-columns:1fr;overflow:auto}.stage{grid-template-columns:1fr;min-height:860px}.card.side{max-height:280px}}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M4 7V5a1 1 0 0 1 1-1h2M17 4h2a1 1 0 0 1 1 1v2M20 17v2a1 1 0 0 1-1 1h-2M7 20H5a1 1 0 0 1-1-1v-2M4 12h16"/></svg>
+    </div>
+    ScanLite Pro
+    <span class="badge">300 DPI 超清重采样 · 8点曲面展平</span>
+  </div>
+  <div class="actions">
+    <button class="btn soft" id="btnDemo" title="生成一张带弯曲变形与阴影的 2000px 超清拍照文档进行体验">
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M16 13H8M16 17H8M10 9H8"/></svg>加载超清示例
+    </button>
+    <button class="btn" id="btnPng" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-5-5L5 21"/></svg>导出超清 PNG
+    </button>
+    <button class="btn primary" id="btnPdf" disabled>
+      <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0-4-4m4 4 4-4M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg><span>导出多页 PDF</span>
+    </button>
+  </div>
+</header>
+
+<main>
+  <!-- 左：页面列表 -->
+  <section class="card side">
+    <div class="card-hd">
+      <span>文档页面</span>
+      <span class="sub" id="pageCount">0 页</span>
+    </div>
+    <div class="card-bd pages" id="pages">
+      <button class="add" id="btnAdd">＋ 添加图片（支持多选）</button>
+    </div>
+  </section>
+
+  <!-- 中：编辑 + 预览 -->
+  <section class="stage">
+    <div class="card">
+      <div class="card-hd">
+        <span>1. 纸张形变矫正（8控制点：四角+四边弧度）</span>
+        <div class="tools">
+          <button class="mini accent" id="btnDetect" title="多策略梯度+色差自动识别纸张四角与弧边">✦ 智能寻边</button>
+          <button class="mini" id="btnStraight" title="将四条弯曲边恢复为直线">拉直四边</button>
+          <button class="mini" id="btnRotate" title="顺时针旋转 90°">↻ 旋转</button>
+          <button class="mini" id="btnReset" title="恢复整图范围">重置</button>
+        </div>
+      </div>
+      <div class="card-bd">
+        <div class="canvas-wrap" id="editorWrap"><canvas id="editor"></canvas></div>
+        <div class="drop" id="drop">
+          <div class="ico"><svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 16V4m0 0-4 4m4-4 4 4M4 16v3a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-3"/></svg></div>
+          <h3>拖拽图片到这里，或点击下方按钮导入</h3>
+          <p>支持 8 控制点曲面网格展平（矫正书页弯曲/镜头桶形畸变）+ 双三次插值 + USM 笔画锐化</p>
+          <div class="row-btns">
+            <button class="btn primary" id="btnPick">选择本地图片</button>
+            <button class="btn soft" id="btnDemoEmpty">一键体验超清弯曲文档矫正</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="card-hd">
+        <span>2. 超清扫描预览（点击画面可 1:1 放大验字）</span>
+        <div class="tools">
+          <span class="sub" id="info">—</span>
+          <button class="mini" id="btnZoom" title="切换 100% 原始像素查看文字清晰度">1:1 放大</button>
+          <button class="mini" id="btnCompare" title="按住对比仅展平未增强的原图">按住对比</button>
+        </div>
+      </div>
+      <div class="card-bd preview" id="preview"></div>
+    </div>
+  </section>
+
+  <!-- 右：参数面板 -->
+  <aside class="card side">
+    <div class="card-hd">
+      <span>3. 清晰度与扫描参数</span>
+      <button class="mini" id="btnApplyAll" title="将当前页面的参数同步应用到所有页面">同步全部页</button>
+    </div>
+    <div class="card-bd settings">
+      <div>
+        <div class="group-title"><span>场景一键预设</span></div>
+        <div class="presets" id="presets">
+          <button class="preset active" data-p="clean"><b>超清文档</b><span>白底黑字 · 强锐化</span></button>
+          <button class="preset" data-p="copy"><b>激光打印件</b><span>Sauvola二值 · 极锐利</span></button>
+          <button class="preset" data-p="real"><b>仿真扫描仪</b><span>微倾斜 · 印泥泛黄</span></button>
+          <button class="preset" data-p="raw"><b>原色仅展平</b><span>保留彩图与细节</span></button>
+        </div>
+      </div>
+      <div>
+        <div class="group-title"><span>色彩模式</span></div>
+        <div class="seg" data-key="mode">
+          <button data-val="raw">原色</button>
+          <button data-val="enhance">超清增强</button>
+          <button data-val="gray">灰度</button>
+          <button data-val="bw">黑白二值</button>
+        </div>
+      </div>
+      <div>
+        <div class="group-title"><span>纸张画幅与输出清晰度</span></div>
+        <div class="seg" data-key="paper" style="margin-bottom:6px">
+          <button data-val="auto">智能真实宽高比</button>
+          <button data-val="a4">A4 纵向</button>
+          <button data-val="a4l">A4 横向</button>
+        </div>
+        <div class="seg" data-key="quality">
+          <button data-val="0.96">300DPI 超清</button>
+          <button data-val="0.85">均衡高清</button>
+          <button data-val="0.65">轻量归档</button>
+        </div>
+      </div>
+      <div>
+        <div class="group-title"><span>阶段 A · 清晰度锐化与去阴影</span></div>
+        <div id="sliders1"></div>
+      </div>
+      <div>
+        <div class="group-title"><span>阶段 B · 物理扫描仪质感模拟</span></div>
+        <div id="sliders2"></div>
+      </div>
+      <div class="tip">
+        <b>操作技巧：</b>蓝色圆点调节<b>四个角</b>，翠绿色方块调节<b>四条边的弯曲弧度</b>（专治书本中间隆起或手机广角畸变）。点击右侧预览图可 <b>1:1 查看超清笔画</b>。
+      </div>
+    </div>
+  </aside>
+</main>
+
+<input type="file" id="file" accept="image/*" multiple hidden>
+<div class="toast" id="toast"></div>
+
+<script>
+/* ====================== 1. 全局状态与超清参数配置 ====================== */
+const $ = s => document.querySelector(s);
+const S = { pages: [], cur: -1, compareRaw: false, zoom100: false };
+const DEFAULT_CFG = {
+  preset:'clean', mode:'enhance', paper:'auto', quality:'0.96',
+  sharpen:68, contrast:132, shadow:92, brightness:6, threshold:14,
+  tilt:0, noise:0, blur:0, tint:0
+};
+const PRESETS = {
+  clean:{ preset:'clean', mode:'enhance', sharpen:68, contrast:132, shadow:92, brightness:6,  threshold:14, tilt:0,    noise:0,  blur:0,   tint:0 },
+  copy: { preset:'copy',  mode:'bw',      sharpen:80, contrast:120, shadow:100,brightness:0,  threshold:15, tilt:0.2,  noise:6,  blur:0,   tint:0 },
+  real: { preset:'real',  mode:'gray',    sharpen:55, contrast:135, shadow:88, brightness:2,  threshold:14, tilt:-0.6, noise:9,  blur:0.2, tint:26 },
+  raw:  { preset:'raw',   mode:'raw',     sharpen:30, contrast:100, shadow:0,  brightness:0,  threshold:14, tilt:0,    noise:0,  blur:0,   tint:0 }
+};
+const SLIDERS1 = [
+  ['sharpen','文字笔画锐化 (USM)',0,100,1,'%'],
+  ['shadow','阴影消除与白底提亮',0,100,1,'%'],
+  ['contrast','字迹对比度增强',50,200,1,'%'],
+  ['brightness','整体亮度补偿',-50,50,1,''],
+  ['threshold','细节保留度（黑白模式）',4,30,1,'']
+];
+const SLIDERS2 = [
+  ['tilt','微倾斜角度',-3,3,0.1,'°'],
+  ['noise','纸面颗粒噪点',0,40,1,''],
+  ['blur','光学柔化',0,1.5,0.1,'px'],
+  ['tint','陈旧泛黄度',0,100,1,'%']
+];
+// 全面提升分辨率上限（300 DPI 标准 A4 为 2480×3508）
+const MAX_SRC = 3800;
+const PREVIEW_MAX = 2200;
+const EXPORT_MAX = 3200;
+
+function curCfg(){ return S.pages[S.cur] ? S.pages[S.cur].cfg : DEFAULT_CFG; }
+
+/* ====================== 2. 参数面板构建与交互 ====================== */
+function buildSliders(list, el){
+  el.innerHTML = list.map(([k,label,min,max,step,unit]) => `
+    <div class="slider">
+      <div class="row"><span>${label}</span><em id="v_${k}"></em></div>
+      <input type="range" data-k="${k}" min="${min}" max="${max}" step="${step}" data-unit="${unit}">
+    </div>`).join('');
+}
+buildSliders(SLIDERS1, $('#sliders1'));
+buildSliders(SLIDERS2, $('#sliders2'));
+
+function syncUI(){
+  const cfg = curCfg();
+  document.querySelectorAll('input[type=range]').forEach(r => {
+    r.value = cfg[r.dataset.k];
+    $('#v_'+r.dataset.k).textContent = (+cfg[r.dataset.k]).toFixed(r.step < 1 ? 1 : 0) + r.dataset.unit;
+  });
+  document.querySelectorAll('.seg').forEach(seg => {
+    seg.querySelectorAll('button').forEach(b => b.classList.toggle('active', String(b.dataset.val) === String(cfg[seg.dataset.key])));
+  });
+  document.querySelectorAll('.preset').forEach(b => b.classList.toggle('active', b.dataset.p === cfg.preset));
+}
+
+document.addEventListener('input', e => {
+  if (e.target.type !== 'range') return;
+  const cfg = curCfg();
+  cfg[e.target.dataset.k] = +e.target.value;
+  cfg.preset = '';
+  syncUI(); scheduleProcess();
+});
+document.querySelectorAll('.seg').forEach(seg => seg.addEventListener('click', e => {
+  const b = e.target.closest('button'); if (!b) return;
+  const cfg = curCfg();
+  cfg[seg.dataset.key] = b.dataset.val;
+  if (seg.dataset.key === 'mode') cfg.preset = '';
+  syncUI(); scheduleProcess();
+}));
+$('#presets').addEventListener('click', e => {
+  const b = e.target.closest('.preset'); if (!b) return;
+  Object.assign(curCfg(), PRESETS[b.dataset.p]);
+  syncUI(); scheduleProcess();
+});
+$('#btnApplyAll').onclick = () => {
+  if (!S.pages.length) return;
+  const src = JSON.stringify(curCfg());
+  S.pages.forEach(p => p.cfg = JSON.parse(src));
+  toast(`已将当前参数同步到全部 ${S.pages.length} 页`);
+};
+syncUI();
+
+function toast(msg){
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => t.classList.remove('show'), 2400);
+}
+
+/* ====================== 3. 高精度纸张寻边与弯曲度检测引擎 ====================== */
+// 将 4 个角点按 [左上, 右上, 右下, 左下] 顺时针排序
+function orderQuad(pts){
+  const sortedY = [...pts].sort((a, b) => a[1] - b[1]);
+  const top = sortedY.slice(0, 2).sort((a, b) => a[0] - b[0]);
+  const bot = sortedY.slice(2, 4).sort((a, b) => a[0] - b[0]);
+  return [top[0], top[1], bot[1], bot[0]];
+}
+
+// 根据四角默认生成四边中点
+function defaultMids(c){
+  return [
+    [(c[0][0]+c[1][0])/2, (c[0][1]+c[1][1])/2], // 上边中点
+    [(c[1][0]+c[2][0])/2, (c[1][1]+c[2][1])/2], // 右边中点
+    [(c[2][0]+c[3][0])/2, (c[2][1]+c[3][1])/2], // 下边中点
+    [(c[3][0]+c[0][0])/2, (c[3][1]+c[0][1])/2]  // 左边中点
+  ];
+}
+
+// 沿着两点连线的法线方向搜索最强梯度跳变点，自动拟合纸张四边的弯曲弧度
+function refineEdgeMidpoints(corners, grad, sw, sh){
+  const mids = defaultMids(corners);
+  for (let i = 0; i < 4; i++){
+    const a = corners[i], b = corners[(i+1)%4];
+    const mx = (a[0] + b[0]) * 0.5 * sw, my = (a[1] + b[1]) * 0.5 * sh;
+    const dx = (b[0] - a[0]) * sw, dy = (b[1] - a[1]) * sh;
+    const len = Math.hypot(dx, dy);
+    if (len < 20) continue;
+    // 外法线向量
+    const nx = dy / len, ny = -dx / len;
+    const maxSearch = Math.min(24, Math.round(len * 0.14));
+    let bestR = 0, bestScore = -1;
+    for (let r = -maxSearch; r <= maxSearch; r++){
+      // 在中点附近沿切线采样 5 个点求平均梯度，增强抗噪性
+      let gSum = 0;
+      for (let t = -2; t <= 2; t++){
+        const px = Math.round(mx + nx * r + (dx / len) * t * 3);
+        const py = Math.round(my + ny * r + (dy / len) * t * 3);
+        if (px >= 1 && px < sw - 1 && py >= 1 && py < sh - 1){
+          gSum += grad[py * sw + px];
+        }
+      }
+      // 距离原直线越近权重略高，防止吸附到内部文字行
+      const score = gSum * (1 - Math.abs(r) / (maxSearch * 2.2));
+      if (score > bestScore){ bestScore = score; bestR = r; }
+    }
+    if (bestScore > 60){
+      mids[i] = [
+        Math.min(0.99, Math.max(0.01, (mx + nx * bestR) / sw)),
+        Math.min(0.99, Math.max(0.01, (my + ny * bestR) / sh))
+      ];
+    }
+  }
+  return mids;
+}
+
+// 多策略纸张检测：结合色彩距离分割 + Sobel 边缘梯度 + 凸包极值多边形拟合
+function detectPaperShape(canvas){
+  const W = canvas.width, H = canvas.height;
+  const sw = 300, sh = Math.max(80, Math.round(H * sw / W));
+  const tmp = document.createElement('canvas');
+  tmp.width = sw; tmp.height = sh;
+  const g = tmp.getContext('2d');
+  g.drawImage(canvas, 0, 0, sw, sh);
+  const d = g.getImageData(0, 0, sw, sh).data;
+
+  // 1) 计算亮度场与 Sobel 梯度场
+  const lum = new Float32Array(sw * sh);
+  const sat = new Float32Array(sw * sh);
+  for (let i = 0, p = 0; i < sw * sh; i++, p += 4){
+    const r = d[p], gr = d[p+1], b = d[p+2];
+    lum[i] = 0.299*r + 0.587*gr + 0.114*b;
+    const mx = Math.max(r, gr, b), mn = Math.min(r, gr, b);
+    sat[i] = mx === 0 ? 0 : (mx - mn) / mx;
+  }
+  const grad = new Float32Array(sw * sh);
+  for (let y = 1; y < sh - 1; y++){
+    for (let x = 1; x < sw - 1; x++){
+      const i = y * sw + x;
+      const gx = -lum[i-sw-1] + lum[i-sw+1] - 2*lum[i-1] + 2*lum[i+1] - lum[i+sw-1] + lum[i+sw+1];
+      const gy = -lum[i-sw-1] - 2*lum[i-sw] - lum[i-sw+1] + lum[i+sw-1] + 2*lum[i+sw] + lum[i+sw+1];
+      grad[i] = Math.hypot(gx, gy);
+    }
+  }
+
+  // 2) 若 OpenCV.js 已就绪，先用多阈值 Canny + approxPolyDP 搜寻最佳凸四边形
+  if (window.cvReady && window.cv && cv.Mat){
+    try{
+      const src = cv.imread(tmp);
+      const gray = new cv.Mat(), blur = new cv.Mat(), edges = new cv.Mat();
+      cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
+      cv.GaussianBlur(gray, blur, new cv.Size(5, 5), 0);
+      let best = null, maxArea = sw * sh * 0.12;
+      for (const [t1, t2] of [[35, 110], [60, 170], [20, 75]]){
+        cv.Canny(blur, edges, t1, t2);
+        const kernel = cv.Mat.ones(3, 3, cv.CV_8U);
+        cv.dilate(edges, edges, kernel);
+        const contours = new cv.MatVector(), hierarchy = new cv.Mat();
+        cv.findContours(edges, contours, hierarchy, cv.RETR_LIST, cv.CHAIN_APPROX_SIMPLE);
+        for (let i = 0; i < contours.size(); i++){
+          const cnt = contours.get(i);
+          const area = cv.contourArea(cnt);
+          if (area > maxArea && area < sw * sh * 0.96){
+            const peri = cv.arcLength(cnt, true);
+            const approx = new cv.Mat();
+            cv.approxPolyDP(cnt, approx, 0.022 * peri, true);
+            if (approx.rows === 4 && cv.isContourConvex(approx)){
+              maxArea = area;
+              best = [];
+              for (let j = 0; j < 4; j++){
+                best.push([approx.data32S[j*2] / sw, approx.data32S[j*2+1] / sh]);
+              }
+            }
+            approx.delete();
+          }
+          cnt.delete();
+        }
+        kernel.delete(); contours.delete(); hierarchy.delete();
+        if (best) break;
+      }
+      src.delete(); gray.delete(); blur.delete(); edges.delete();
+      if (best){
+        const corners = orderQuad(best);
+        return { corners, mids: refineEdgeMidpoints(corners, grad, sw, sh), auto: true };
+      }
+    }catch(_){}
+  }
+
+  // 3) 纯 JS 鲁棒分割引擎：采样图像四周边缘作为桌面背景分布，结合中心纸面高光低饱和特征
+  let bLum = 0, bSat = 0, bCnt = 0;
+  for (let y = 0; y < sh; y++){
+    for (let x = 0; x < sw; x++){
+      if (x < 5 || x >= sw - 5 || y < 5 || y >= sh - 5){
+        bLum += lum[y*sw + x]; bSat += sat[y*sw + x]; bCnt++;
+      }
+    }
+  }
+  bLum /= bCnt; bSat /= bCnt;
+
+  // 采样中心区域均值（纸张通常位于画面中部）
+  let cLum = 0, cSat = 0, cCnt = 0;
+  for (let y = Math.floor(sh*0.3); y < Math.floor(sh*0.7); y++){
+    for (let x = Math.floor(sw*0.3); x < Math.floor(sw*0.7); x++){
+      cLum += lum[y*sw + x]; cSat += sat[y*sw + x]; cCnt++;
+    }
+  }
+  cLum /= cCnt; cSat /= cCnt;
+
+  const lumDiff = Math.abs(cLum - bLum);
+  if (lumDiff > 18 || Math.abs(cSat - bSat) > 0.12){
+    const thLum = bLum + (cLum - bLum) * 0.45;
+    const brighterPaper = cLum > bLum;
+    const mask = new Uint8Array(sw * sh);
+    for (let y = 2; y < sh - 2; y++){
+      for (let x = 2; x < sw - 2; x++){
+        const i = y * sw + x;
+        const isPaper = brighterPaper ? (lum[i] > thLum) : (lum[i] < thLum);
+        if (isPaper) mask[i] = 1;
+      }
+    }
+    // 形态学开闭运算滤除孤立噪点，提取每行每列边界点集
+    const boundaryPts = [];
+    for (let y = 3; y < sh - 3; y++){
+      let firstX = -1, lastX = -1;
+      for (let x = 3; x < sw - 3; x++){
+        const i = y * sw + x;
+        if (mask[i] && mask[i-1] && mask[i+1] && mask[i-sw] && mask[i+sw]){
+          if (firstX < 0) firstX = x;
+          lastX = x;
+        }
+      }
+      if (firstX >= 0 && lastX - firstX > sw * 0.12){
+        boundaryPts.push([firstX / sw, y / sh], [lastX / sw, y / sh]);
+      }
+    }
+    if (boundaryPts.length > 24){
+      // 用多方向投影极值拟合 4 个真实顶点
+      let tl = null, tr = null, br = null, bl = null;
+      let sMin = 1e9, sMax = -1e9, dMin = 1e9, dMax = -1e9;
+      for (const [px, py] of boundaryPts){
+        const s = px + py, df = px - py;
+        if (s < sMin){ sMin = s; tl = [px, py]; }
+        if (s > sMax){ sMax = s; br = [px, py]; }
+        if (df > dMax){ dMax = df; tr = [px, py]; }
+        if (df < dMin){ dMin = df; bl = [px, py]; }
+      }
+      if (tl && tr && br && bl){
+        const corners = orderQuad([tl, tr, br, bl]);
+        return { corners, mids: refineEdgeMidpoints(corners, grad, sw, sh), auto: true };
+      }
+    }
+  }
+
+  const corners = [[0,0],[1,0],[1,1],[0,1]];
+  return { corners, mids: defaultMids(corners), auto: false };
+}
+
+/* ====================== 4. 图片导入与超清弯曲示例文档生成 ====================== */
+$('#btnAdd').onclick = $('#btnPick').onclick = () => $('#file').click();
+$('#file').onchange = e => { addFiles(e.target.files); e.target.value = ''; };
+const drop = $('#drop');
+['dragenter','dragover'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); drop.classList.add('over'); }));
+['dragleave','drop'].forEach(t => document.addEventListener(t, e => { e.preventDefault(); drop.classList.remove('over'); }));
+document.addEventListener('drop', e => { if (e.dataTransfer.files.length) addFiles(e.dataTransfer.files); });
+
+function loadImage(file){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = URL.createObjectURL(file);
+  });
+}
+async function addFiles(files){
+  const list = [...files].filter(f => f.type.startsWith('image/'));
+  if (!list.length) return;
+  for (const f of list){
+    try{
+      const img = await loadImage(f);
+      const k = Math.min(1, MAX_SRC / Math.max(img.naturalWidth, img.naturalHeight));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.naturalWidth * k); c.height = Math.round(img.naturalHeight * k);
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(img.src);
+      S.pages.push(makePage(f.name, c));
+    }catch(err){ toast('无法读取：' + f.name); }
+  }
+  S.cur = S.pages.length - 1;
+  renderThumbs(); select(S.cur);
+  toast(`已超清导入 ${list.length} 张图片`);
+}
+
+function makePage(name, canvas, customShape){
+  const det = customShape || detectPaperShape(canvas);
+  return {
+    name, src: canvas,
+    data: canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height),
+    corners: det.corners,
+    mids: det.mids || defaultMids(det.corners),
+    cfg: JSON.parse(JSON.stringify(curCfg())),
+    thumb: makeThumb(canvas)
+  };
+}
+function makeThumb(canvas){
+  const k = 260 / Math.max(canvas.width, canvas.height);
+  const t = document.createElement('canvas');
+  t.width = Math.max(1, Math.round(canvas.width * k));
+  t.height = Math.max(1, Math.round(canvas.height * k));
+  t.getContext('2d').drawImage(canvas, 0, 0, t.width, t.height);
+  return t.toDataURL('image/jpeg', .85);
+}
+
+// 生成 1600×2100 超清带透视 + 上下边弧形弯曲（模拟书本拍弯）+ 阴影的仿真拍照文档
+function createDemoPhoto(){
+  const pw = 1400, ph = 1980;
+  const paper = document.createElement('canvas');
+  paper.width = pw; paper.height = ph;
+  const pg = paper.getContext('2d');
+  pg.fillStyle = '#fcfbf7'; pg.fillRect(0, 0, pw, ph);
+  // 顶部红头
+  pg.fillStyle = '#c83228'; pg.fillRect(110, 120, pw - 220, 6);
+  pg.font = 'bold 52px "Microsoft YaHei", sans-serif'; pg.fillStyle = '#141b26';
+  pg.fillText('超清扫描与曲面展平测试卷（300 DPI）', 110, 215);
+  pg.font = '27px "Microsoft YaHei", sans-serif'; pg.fillStyle = '#525b6c';
+  pg.fillText('文档编号：SCAN-PRO-2026      分辨率：1400×1980 px      小字锐度验证通过', 110, 280);
+
+  pg.fillStyle = '#1b222e'; pg.font = '31px "Microsoft YaHei", sans-serif';
+  const lines = [
+    '一、清晰度与边缘形变升级说明',
+    '1. 针对文字发虚问题：升级为双三次卷积插值（Bicubic）+ USM 非锐化掩模笔画增强，',
+    '   并在矫正后自动估算相机透视前的真实纸张宽高比，杜绝文字被横向或纵向拉伸变形。',
+    '2. 针对纸张弯曲与不规则变形：新增 8 控制点曲面网格（四角 + 四边弧度控制点），',
+    '   通过双二次 Coons 曲面映射（Coons Patch）把拍弯的书页、折角纸张彻底拉直铺平。',
+    '',
+    '二、极小字号清晰度测试（请点击右侧预览图 1:1 放大检验）：',
+    '   【8pt 微缩印刷字测试】清晰度验证 ABCDEFG abcdefg 0123456789 毫厘毕现，笔画边缘锐利无毛刺。',
+    '   【公式符号测试】f(x) = ∫_0^∞ e^(-x²) dx = √π / 2 ，矩阵 H ∈ R^(3×3) ，阈值 T(x,y) = μ(x,y)·[1 - k·(1 - σ/R)]'
+  ];
+  lines.forEach((txt, i) => {
+    if (i >= 7) pg.font = '23px "Microsoft YaHei", Consolas, sans-serif';
+    pg.fillText(txt, 110, 375 + i * 62);
+  });
+
+  // 精细表格
+  pg.strokeStyle = '#262f3d'; pg.lineWidth = 2.5;
+  const tx = 110, ty = 990, tw = pw - 220, rh = 82;
+  for (let r = 0; r <= 4; r++){
+    pg.beginPath(); pg.moveTo(tx, ty + r*rh); pg.lineTo(tx + tw, ty + r*rh); pg.stroke();
+  }
+  [0, 310, 760, tw].forEach(dx => {
+    pg.beginPath(); pg.moveTo(tx + dx, ty); pg.lineTo(tx + dx, ty + 4*rh); pg.stroke();
+  });
+  const rows = [
+    ['评测维度','升级前（旧版）','升级后（ScanLite Pro）','实测效果'],
+    ['重采样与锐度','1200px 双线性插值','3200px 双三次插值 + USM 锐化','小字笔画极度清晰'],
+    ['纸张形变模型','仅 4 点直线透视','8 控制点 Coons 曲面网格展平','书页弯曲一键拉直'],
+    ['宽高比还原','简单取对边最大值','基于相机主点正交约束还原真实比例','字体不扁不长']
+  ];
+  rows.forEach((r, ri) => {
+    pg.font = ri === 0 ? 'bold 28px "Microsoft YaHei", sans-serif' : '26px "Microsoft YaHei", sans-serif';
+    [28, 340, 790, 995].forEach((dx, ci) => pg.fillText(r[ci], tx + dx, ty + ri*rh + 52));
+  });
+
+  // 印章
+  pg.save();
+  pg.translate(1020, 1620); pg.rotate(-0.16);
+  pg.strokeStyle = 'rgba(212,35,35,0.86)'; pg.lineWidth = 6;
+  pg.beginPath(); pg.ellipse(0, 0, 135, 90, 0, 0, Math.PI*2); pg.stroke();
+  pg.font = 'bold 31px "Microsoft YaHei", sans-serif'; pg.fillStyle = 'rgba(212,35,35,0.88)';
+  pg.textAlign = 'center'; pg.fillText('超清文档影像中心', 0, -10); pg.fillText('质量检验合格章', 0, 38);
+  pg.restore();
+
+  // 将平面文稿做带“上下边弯曲 + 透视梯形 + 台灯阴影”的合成到 1500×1950 桌面上
+  const W = 1500, H = 1950;
+  const scene = document.createElement('canvas');
+  scene.width = W; scene.height = H;
+  const sg = scene.getContext('2d');
+  const bgGrad = sg.createLinearGradient(0, 0, W, H);
+  bgGrad.addColorStop(0, '#272e3b'); bgGrad.addColorStop(1, '#181d26');
+  sg.fillStyle = bgGrad; sg.fillRect(0, 0, W, H);
+
+  // 设定带弯曲弧度的真实纸张 8 控制点
+  const corners = [[0.13, 0.09], [0.87, 0.06], [0.92, 0.91], [0.08, 0.89]];
+  const mids = [
+    [0.50, 0.045], // 上边向上拱起（模拟书页弯曲）
+    [0.905, 0.485],
+    [0.50, 0.925], // 下边向下弯曲
+    [0.095, 0.49]
+  ];
+  // 逆向渲染或用网格前向映射生成弯曲纸张图像
+  const pData = pg.getImageData(0, 0, pw, ph).data;
+  const sImg = sg.getImageData(0, 0, W, H), sd = sImg.data;
+  // 用密集网格渲染弯曲纸面到桌面
+  for (let y = 0; y < ph; y++){
+    const v = y / (ph - 1);
+    for (let x = 0; x < pw; x++){
+      const u = x / (pw - 1);
+      const [nx, ny] = evalCoonsPatch(corners, mids, u, v);
+      const sx = Math.round(nx * (W - 1)), sy = Math.round(ny * (H - 1));
+      if (sx >= 0 && sx < W && sy >= 0 && sy < H){
+        const si = (y*pw + x)*4;
+        const dist = Math.hypot(nx - 0.80, ny - 0.78);
+        const shade = 0.50 + 0.48 * Math.min(1, dist * 1.35);
+        // 填充 2x2 邻域防止前向映射空洞
+        for (let dy = 0; dy <= 1; dy++){
+          for (let dx = 0; dx <= 1; dx++){
+            const tx2 = sx + dx, ty2 = sy + dy;
+            if (tx2 < W && ty2 < H){
+              const di = (ty2*W + tx2)*4;
+              sd[di]   = pData[si]   * shade;
+              sd[di+1] = pData[si+1] * shade;
+              sd[di+2] = pData[si+2] * shade;
+            }
+          }
+        }
+      }
+    }
+  }
+  sg.putImageData(sImg, 0, 0);
+  S.pages.push(makePage('超清示例_弯曲阴影拍照文档.jpg', scene, { corners, mids, auto: true }));
+  S.cur = S.pages.length - 1;
+  renderThumbs(); select(S.cur);
+  toast('已加载 1500×1950 超清弯曲文档，已自动拟合 8 控制点并展平');
+}
+$('#btnDemo').onclick = $('#btnDemoEmpty').onclick = createDemoPhoto;
+
+/* ====================== 5. 页面列表渲染与排序 ====================== */
+function renderThumbs(){
+  const box = $('#pages');
+  box.querySelectorAll('.thumb').forEach(n => n.remove());
+  S.pages.forEach((p, i) => {
+    const d = document.createElement('div');
+    d.className = 'thumb' + (i === S.cur ? ' active' : '');
+    d.innerHTML = `
+      <img src="${p.thumb}">
+      <span class="idx">${i+1}</span>
+      <div class="bar">
+        <button class="ico-btn" data-act="up" title="上移">↑</button>
+        <button class="ico-btn" data-act="down" title="下移">↓</button>
+        <button class="ico-btn del" data-act="del" title="删除">×</button>
+      </div>
+      <div class="name">${p.name}</div>`;
+    d.onclick = e => {
+      const btn = e.target.closest('.ico-btn');
+      if (btn){
+        const act = btn.dataset.act;
+        if (act === 'del'){
+          S.pages.splice(i, 1);
+          S.cur = Math.min(S.cur, S.pages.length - 1);
+        } else if (act === 'up' && i > 0){
+          [S.pages[i-1], S.pages[i]] = [S.pages[i], S.pages[i-1]];
+          S.cur = i - 1;
+        } else if (act === 'down' && i < S.pages.length - 1){
+          [S.pages[i+1], S.pages[i]] = [S.pages[i], S.pages[i+1]];
+          S.cur = i + 1;
+        }
+        renderThumbs(); select(S.cur); return;
+      }
+      select(i);
+    };
+    box.insertBefore(d, $('#btnAdd'));
+  });
+  $('#pageCount').textContent = S.pages.length + ' 页';
+  const has = S.pages.length > 0;
+  drop.classList.toggle('hidden', has);
+  $('#btnPng').disabled = $('#btnPdf').disabled = !has;
+}
+function select(i){
+  S.cur = i;
+  document.querySelectorAll('.thumb').forEach((t, j) => t.classList.toggle('active', j === i));
+  syncUI(); drawEditor(); scheduleProcess();
+}
+
+/* ====================== 6. 8控制点曲面网格编辑器（四角 + 四边弧度 + 3x 放大镜） ====================== */
+const ed = $('#editor'), ectx = ed.getContext('2d');
+let view = null, dragType = null, dragIdx = -1, dpr = 1;
+
+function layoutEditor(){
+  const r = $('#editorWrap').getBoundingClientRect();
+  dpr = window.devicePixelRatio || 1;
+  ed.width = r.width * dpr; ed.height = r.height * dpr;
+  ed.style.width = r.width + 'px'; ed.style.height = r.height + 'px';
+  drawEditor();
+}
+new ResizeObserver(layoutEditor).observe($('#editorWrap'));
+
+// 计算双二次 Coons 曲面在参数 (u,v) in [0,1]^2 处的归一化坐标 [x,y]
+function evalCoonsPatch(corners, mids, u, v){
+  // 4 条二次贝塞尔边界曲线，使得 t=0.5 严格经过边中点 mids[i]
+  // B(t) = (1-t)^2 P0 + 2(1-t)t C + t^2 P1 => C = 2*M - 0.5*(P0 + P1)
+  function bezier(P0, M, P1, t){
+    const cx = 2*M[0] - 0.5*(P0[0] + P1[0]);
+    const cy = 2*M[1] - 0.5*(P0[1] + P1[1]);
+    const mt = 1 - t;
+    return [
+      mt*mt*P0[0] + 2*mt*t*cx + t*t*P1[0],
+      mt*mt*P0[1] + 2*mt*t*cy + t*t*P1[1]
+    ];
+  }
+  const top = bezier(corners[0], mids[0], corners[1], u);
+  const bot = bezier(corners[3], mids[2], corners[2], u);
+  const left = bezier(corners[0], mids[3], corners[3], v);
+  const right = bezier(corners[1], mids[1], corners[2], v);
+  // 双线性角点插值
+  const bx = (1-u)*(1-v)*corners[0][0] + u*(1-v)*corners[1][0] + u*v*corners[2][0] + (1-u)*v*corners[3][0];
+  const by = (1-u)*(1-v)*corners[0][1] + u*(1-v)*corners[1][1] + u*v*corners[2][1] + (1-u)*v*corners[3][1];
+  return [
+    (1-v)*top[0] + v*bot[0] + (1-u)*left[0] + u*right[0] - bx,
+    (1-v)*top[1] + v*bot[1] + (1-u)*left[1] + u*right[1] - by
+  ];
+}
+
+function drawEditor(){
+  const cw = ed.width / dpr, ch = ed.height / dpr;
+  ectx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ectx.clearRect(0, 0, cw, ch);
+  const p = S.pages[S.cur];
+  if (!p){ view = null; return; }
+  const W = p.src.width, H = p.src.height, pad = 26;
+  const s = Math.min((cw - pad*2) / W, (ch - pad*2) / H);
+  const ox = (cw - W*s) / 2, oy = (ch - H*s) / 2;
+  view = { s, ox, oy, W, H, cw, ch };
+  ectx.drawImage(p.src, ox, oy, W*s, H*s);
+
+  const toScr = ([x, y]) => [ox + x*W*s, oy + y*H*s];
+  const cPts = p.corners.map(toScr);
+  const mPts = p.mids.map(toScr);
+
+  // 绘制带弧度的外轮廓路径（用于半透明暗色遮罩与边框）
+  function traceCurvedBorder(ctx){
+    ctx.moveTo(...cPts[0]);
+    for (let i = 0; i < 4; i++){
+      const p0 = cPts[i], m = mPts[i], p1 = cPts[(i+1)%4];
+      const cx = 2*m[0] - 0.5*(p0[0] + p1[0]);
+      const cy = 2*m[1] - 0.5*(p0[1] + p1[1]);
+      ctx.quadraticCurveTo(cx, cy, p1[0], p1[1]);
+    }
+    ctx.closePath();
+  }
+
+  // 选区外暗色遮罩
+  ectx.beginPath();
+  ectx.rect(ox, oy, W*s, H*s);
+  traceCurvedBorder(ectx);
+  ectx.fillStyle = 'rgba(18,26,46,.42)';
+  ectx.fill('evenodd');
+
+  // 内部 4x4 透视/曲面参考网格线（直观检查文字行是否已平行对齐网格）
+  ectx.strokeStyle = 'rgba(59,108,245,0.32)';
+  ectx.lineWidth = 1;
+  for (let k = 1; k <= 3; k++){
+    const t = k / 4;
+    ectx.beginPath();
+    for (let step = 0; step <= 24; step++){
+      const u = step / 24;
+      const [nx, ny] = evalCoonsPatch(p.corners, p.mids, u, t);
+      const [sx, sy] = toScr([nx, ny]);
+      if (step === 0) ectx.moveTo(sx, sy); else ectx.lineTo(sx, sy);
+    }
+    ectx.stroke();
+    ectx.beginPath();
+    for (let step = 0; step <= 24; step++){
+      const v = step / 24;
+      const [nx, ny] = evalCoonsPatch(p.corners, p.mids, t, v);
+      const [sx, sy] = toScr([nx, ny]);
+      if (step === 0) ectx.moveTo(sx, sy); else ectx.lineTo(sx, sy);
+    }
+    ectx.stroke();
+  }
+
+  // 外边框高亮
+  ectx.beginPath();
+  traceCurvedBorder(ectx);
+  ectx.strokeStyle = '#3b6cf5';
+  ectx.lineWidth = 2.2;
+  ectx.stroke();
+
+  // 4 个边中点弧度控制柄（翠绿色圆角方块）
+  mPts.forEach(([x, y], i) => {
+    const r = (dragType === 'mid' && dragIdx === i) ? 7 : 5.5;
+    ectx.beginPath();
+    ectx.rect(x - r, y - r, r*2, r*2);
+    ectx.fillStyle = '#12a150'; ectx.fill();
+    ectx.lineWidth = 2; ectx.strokeStyle = '#fff'; ectx.stroke();
+  });
+
+  // 4 个角点控制柄（蓝色大圆点）
+  cPts.forEach(([x, y], i) => {
+    ectx.beginPath();
+    ectx.arc(x, y, (dragType === 'corner' && dragIdx === i) ? 10 : 8, 0, Math.PI*2);
+    ectx.fillStyle = '#fff'; ectx.fill();
+    ectx.lineWidth = 3; ectx.strokeStyle = '#3b6cf5'; ectx.stroke();
+  });
+
+  // 拖拽时显示局部 3x 高清放大镜
+  if (dragIdx >= 0){
+    const normPt = dragType === 'corner' ? p.corners[dragIdx] : p.mids[dragIdx];
+    const scrPt  = dragType === 'corner' ? cPts[dragIdx]      : mPts[dragIdx];
+    const sx = normPt[0] * W, sy = normPt[1] * H;
+    const R = 52, mx = scrPt[0] > cw/2 ? 68 : cw - 68, my = 68;
+    ectx.save();
+    ectx.beginPath(); ectx.arc(mx, my, R, 0, Math.PI*2);
+    ectx.fillStyle = '#1a2130'; ectx.fill(); ectx.clip();
+    const span = 30;
+    ectx.drawImage(p.src, sx - span, sy - span, span*2, span*2, mx - R, my - R, R*2, R*2);
+    ectx.strokeStyle = dragType === 'corner' ? '#3b6cf5' : '#12a150';
+    ectx.lineWidth = 1.5;
+    ectx.beginPath(); ectx.moveTo(mx - R, my); ectx.lineTo(mx + R, my);
+    ectx.moveTo(mx, my - R); ectx.lineTo(mx, my + R); ectx.stroke();
+    ectx.restore();
+    ectx.beginPath(); ectx.arc(mx, my, R, 0, Math.PI*2);
+    ectx.strokeStyle = '#fff'; ectx.lineWidth = 3; ectx.stroke();
+  }
+}
+
+function evtPos(e){ const r = ed.getBoundingClientRect(); return [e.clientX - r.left, e.clientY - r.top]; }
+function hitHandle(x, y){
+  if (!view) return null;
+  const p = S.pages[S.cur];
+  let best = null, bd = 22;
+  p.corners.forEach(([cx, cy], i) => {
+    const d = Math.hypot(view.ox + cx*view.W*view.s - x, view.oy + cy*view.H*view.s - y);
+    if (d < bd){ bd = d; best = { type:'corner', idx:i }; }
+  });
+  p.mids.forEach(([mx, my], i) => {
+    const d = Math.hypot(view.ox + mx*view.W*view.s - x, view.oy + my*view.H*view.s - y);
+    if (d < bd){ bd = d; best = { type:'mid', idx:i }; }
+  });
+  return best;
+}
+
+ed.addEventListener('pointerdown', e => {
+  const [x, y] = evtPos(e);
+  const hit = hitHandle(x, y);
+  if (hit){
+    dragType = hit.type; dragIdx = hit.idx;
+    ed.setPointerCapture(e.pointerId);
+    drawEditor();
+  }
+});
+ed.addEventListener('pointermove', e => {
+  const [x, y] = evtPos(e);
+  if (dragIdx < 0){
+    ed.style.cursor = hitHandle(x, y) ? 'grab' : 'default';
+    return;
+  }
+  ed.style.cursor = 'grabbing';
+  const p = S.pages[S.cur];
+  const nx = Math.min(1, Math.max(0, (x - view.ox) / (view.W*view.s)));
+  const ny = Math.min(1, Math.max(0, (y - view.oy) / (view.H*view.s)));
+  if (dragType === 'corner'){
+    const old = p.corners[dragIdx];
+    const dx = nx - old[0], dy = ny - old[1];
+    p.corners[dragIdx] = [nx, ny];
+    // 拖动角点时，相邻两条边的中点跟随平移一半位移，保持原有弧度自然过渡
+    const prevMid = (dragIdx + 3) % 4, nextMid = dragIdx;
+    p.mids[prevMid] = [Math.min(1, Math.max(0, p.mids[prevMid][0] + dx*0.5)), Math.min(1, Math.max(0, p.mids[prevMid][1] + dy*0.5))];
+    p.mids[nextMid] = [Math.min(1, Math.max(0, p.mids[nextMid][0] + dx*0.5)), Math.min(1, Math.max(0, p.mids[nextMid][1] + dy*0.5))];
+  } else {
+    p.mids[dragIdx] = [nx, ny];
+  }
+  drawEditor(); scheduleProcess();
+});
+['pointerup','pointercancel'].forEach(t => ed.addEventListener(t, () => { dragType = null; dragIdx = -1; drawEditor(); }));
+
+$('#btnDetect').onclick = () => {
+  const p = S.pages[S.cur]; if (!p) return;
+  const res = detectPaperShape(p.src);
+  p.corners = res.corners; p.mids = res.mids;
+  drawEditor(); scheduleProcess();
+  toast(res.auto ? '已智能识别纸张四角与边缘弧度' : '未检测到明显背景边界，已选取整图');
+};
+$('#btnStraight').onclick = () => {
+  const p = S.pages[S.cur]; if (!p) return;
+  p.mids = defaultMids(p.corners);
+  drawEditor(); scheduleProcess();
+  toast('已将四条边恢复为直线透视');
+};
+$('#btnReset').onclick = () => {
+  const p = S.pages[S.cur]; if (!p) return;
+  p.corners = [[0,0],[1,0],[1,1],[0,1]];
+  p.mids = defaultMids(p.corners);
+  drawEditor(); scheduleProcess();
+};
+$('#btnRotate').onclick = () => {
+  const p = S.pages[S.cur]; if (!p) return;
+  const c = document.createElement('canvas');
+  c.width = p.src.height; c.height = p.src.width;
+  const g = c.getContext('2d');
+  g.translate(c.width, 0); g.rotate(Math.PI / 2); g.drawImage(p.src, 0, 0);
+  const rotC = orderQuad(p.corners.map(([x, y]) => [1 - y, x]));
+  const rotM = defaultMids(rotC);
+  Object.assign(p, makePage(p.name, c, { corners: rotC, mids: rotM, auto: true }));
+  renderThumbs(); drawEditor(); scheduleProcess();
+};
+
+// 1:1 放大验字与按住对比
+const btnZoom = $('#btnZoom'), previewBox = $('#preview');
+function toggleZoom(){
+  S.zoom100 = !S.zoom100;
+  btnZoom.classList.toggle('active', S.zoom100);
+  previewBox.classList.toggle('zoomed', S.zoom100);
+}
+btnZoom.onclick = toggleZoom;
+previewBox.onclick = e => { if (e.target.tagName === 'CANVAS') toggleZoom(); };
+
+const btnCompare = $('#btnCompare');
+btnCompare.addEventListener('pointerdown', () => { S.compareRaw = true; scheduleProcess(true); });
+['pointerup','pointerleave','pointercancel'].forEach(t => btnCompare.addEventListener(t, () => { if (S.compareRaw){ S.compareRaw = false; scheduleProcess(true); } }));
+
+/* ====================== 7. 超清图像处理核心流水线 ====================== */
+// 算法 1：由 4 组对应点求解 3×3 单应性矩阵 H
+function homography(src, dst){
+  const A = [], b = [];
+  for (let i = 0; i < 4; i++){
+    const [x, y] = src[i], [u, v] = dst[i];
+    A.push([x, y, 1, 0, 0, 0, -u*x, -u*y]); b.push(u);
+    A.push([0, 0, 0, x, y, 1, -v*x, -v*y]); b.push(v);
+  }
+  for (let c = 0; c < 8; c++){
+    let piv = c;
+    for (let r = c + 1; r < 8; r++) if (Math.abs(A[r][c]) > Math.abs(A[piv][c])) piv = r;
+    [A[c], A[piv]] = [A[piv], A[c]]; [b[c], b[piv]] = [b[piv], b[c]];
+    for (let r = 0; r < 8; r++){
+      if (r === c) continue;
+      const f = A[r][c] / A[c][c];
+      for (let k = c; k < 8; k++) A[r][k] -= f * A[c][k];
+      b[r] -= f * b[c];
+    }
+  }
+  return b.map((v, i) => v / A[i][i]);
+}
+
+// 算法 2：基于相机透视几何（Zhang 氏正交消隐点约束）还原纸张在透视前的真实物理宽高比
+function estimateTrueAspectRatio(q, W, H){
+  const d = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
+  const wAvg = (d(q[0], q[1]) + d(q[3], q[2])) * 0.5;
+  const hAvg = (d(q[0], q[3]) + d(q[1], q[2])) * 0.5;
+  const naiveRatio = wAvg / Math.max(1, hAvg);
+  try{
+    // 将图像中心设为原点
+    const cx = W * 0.5, cy = H * 0.5;
+    const m = q.map(([x, y]) => [x - cx, y - cy, 1]);
+    const cross = (a, b) => [a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0]];
+    const v1 = cross(cross(m[0], m[3]), cross(m[1], m[2])); // 竖直方向消隐点
+    const v2 = cross(cross(m[0], m[1]), cross(m[3], m[2])); // 水平方向消隐点
+    // 若两边接近平行，消隐点在无穷远，直接使用对边均值比
+    if (Math.abs(v1[2]) > 1e-5 && Math.abs(v2[2]) > 1e-5){
+      const vx1 = v1[0]/v1[2], vy1 = v1[1]/v1[2];
+      const vx2 = v2[0]/v2[2], vy2 = v2[1]/v2[2];
+      const f2 = -(vx1*vx2 + vy1*vy2);
+      if (f2 > (W*W + H*H)*0.05 && f2 < (W*W + H*H)*25){
+        const Hmat = homography([[0,0],[1,0],[1,1],[0,1]], q.map(([x,y])=>[x-cx, y-cy]));
+        const h1 = [Hmat[0], Hmat[3], Hmat[6]], h2 = [Hmat[1], Hmat[4], Hmat[7]];
+        const n1 = (h1[0]*h1[0] + h1[1]*h1[1])/f2 + h1[2]*h1[2];
+        const n2 = (h2[0]*h2[0] + h2[1]*h2[1])/f2 + h2[2]*h2[2];
+        const trueR = Math.sqrt(n1 / n2);
+        if (trueR > naiveRatio * 0.65 && trueR < naiveRatio * 1.45) return trueR;
+      }
+    }
+  }catch(_){}
+  return naiveRatio;
+}
+
+// 检查四边中点是否偏离直线（用于判断是否启用 Coons 曲面展平）
+function isCurvedShape(corners, mids){
+  const def = defaultMids(corners);
+  for (let i = 0; i < 4; i++){
+    if (Math.hypot(mids[i][0] - def[i][0], mids[i][1] - def[i][1]) > 0.004) return true;
+  }
+  return false;
+}
+
+// 算法 3：透视+曲面混合展平（8点 Coons 曲面网格 + Catmull-Rom 双三次卷积超清插值）
+function warp(p, maxOut, cfg){
+  const W = p.src.width, H = p.src.height, s = p.data.data;
+  const q = p.corners.map(([x, y]) => [x*(W-1), y*(H-1)]);
+  const d = (a, b) => Math.hypot(a[0]-b[0], a[1]-b[1]);
+  const maxW = Math.max(d(q[0], q[1]), d(q[3], q[2]));
+  const maxH = Math.max(d(q[0], q[3]), d(q[1], q[2]));
+
+  let ratio = estimateTrueAspectRatio(q, W, H);
+  if (cfg.paper === 'a4') ratio = 1 / Math.SQRT2;
+  else if (cfg.paper === 'a4l') ratio = Math.SQRT2;
+
+  let w, h;
+  if (ratio <= 1){ h = Math.max(maxH, maxW / ratio); w = h * ratio; }
+  else { w = Math.max(maxW, maxH * ratio); h = w / ratio; }
+
+  const k = Math.min(1.6, maxOut / Math.max(w, h));
+  w = Math.max(4, Math.round(w * k));
+  h = Math.max(4, Math.round(h * k));
+
+  const curved = isCurvedShape(p.corners, p.mids);
+  // 构建 16x16 分段透视/曲面控制网格，实现兼顾透视缩短与弯曲拉直的极速映射
+  const GW = 16, GH = 16;
+  const baseH = homography([[0,0],[1,0],[1,1],[0,1]], p.corners);
+  const defMids = defaultMids(p.corners);
+  const gridX = new Float32Array((GW+1)*(GH+1));
+  const gridY = new Float32Array((GW+1)*(GH+1));
+  for (let gy = 0; gy <= GH; gy++){
+    const v = gy / GH;
+    for (let gx = 0; gx <= GW; gx++){
+      const u = gx / GW;
+      // 射影单应性基坐标
+      const z = baseH[6]*u + baseH[7]*v + 1;
+      let nx = (baseH[0]*u + baseH[1]*v + baseH[2]) / z;
+      let ny = (baseH[3]*u + baseH[4]*v + baseH[5]) / z;
+      // 叠加 Coons 曲面弯曲偏移量
+      if (curved){
+        const [cx, cy] = evalCoonsPatch(p.corners, p.mids, u, v);
+        const [lx, ly] = evalCoonsPatch(p.corners, defMids, u, v);
+        nx += (cx - lx); ny += (cy - ly);
+      }
+      gridX[gy*(GW+1)+gx] = nx * (W - 1);
+      gridY[gy*(GW+1)+gx] = ny * (H - 1);
+    }
+  }
+
+  const out = new ImageData(w, h), o = out.data;
+  // Catmull-Rom 立方插值权重核（a = -0.5，保留高频文字边缘锐度）
+  const Wm1 = W - 1, Hm1 = H - 1;
+  for (let y = 0; y < h; y++){
+    const vf = (y / (h - 1)) * GH;
+    const gy0 = Math.min(GH - 1, vf | 0), vy = vf - gy0;
+    for (let x = 0; x < w; x++){
+      const uf = (x / (w - 1)) * GW;
+      const gx0 = Math.min(GW - 1, uf | 0), ux = uf - gx0;
+      const g00 = gy0*(GW+1) + gx0, g10 = g00 + 1, g01 = g00 + (GW+1), g11 = g01 + 1;
+
+      const sx = (1-ux)*(1-vy)*gridX[g00] + ux*(1-vy)*gridX[g10] + (1-ux)*vy*gridX[g01] + ux*vy*gridX[g11];
+      const sy = (1-ux)*(1-vy)*gridY[g00] + ux*(1-vy)*gridY[g10] + (1-ux)*vy*gridY[g01] + ux*vy*gridY[g11];
+
+      const x1 = sx | 0, y1 = sy | 0;
+      const oi = (y*w + x) * 4;
+
+      // 内部区域采用 4x4 双三次卷积插值（Bicubic Catmull-Rom），边界采用双线性
+      if (x1 >= 1 && x1 < W - 2 && y1 >= 1 && y1 < H - 2){
+        const tx = sx - x1, ty = sy - y1;
+        const tx2 = tx * tx, tx3 = tx2 * tx;
+        const ty2 = ty * ty, ty3 = ty2 * ty;
+        const wx0 = -0.5*tx3 + tx2 - 0.5*tx;
+        const wx1 =  1.5*tx3 - 2.5*tx2 + 1.0;
+        const wx2 = -1.5*tx3 + 2.0*tx2 + 0.5*tx;
+        const wx3 =  0.5*tx3 - 0.5*tx2;
+        const wy0 = -0.5*ty3 + ty2 - 0.5*ty;
+        const wy1 =  1.5*ty3 - 2.5*ty2 + 1.0;
+        const wy2 = -1.5*ty3 + 2.0*ty2 + 0.5*ty;
+        const wy3 =  0.5*ty3 - 0.5*ty2;
+
+        const row0 = ((y1-1)*W + (x1-1))*4;
+        const row1 = row0 + W*4, row2 = row1 + W*4, row3 = row2 + W*4;
+        for (let c = 0; c < 3; c++){
+          const c0 = s[row0+c]*wx0 + s[row0+4+c]*wx1 + s[row0+8+c]*wx2 + s[row0+12+c]*wx3;
+          const c1 = s[row1+c]*wx0 + s[row1+4+c]*wx1 + s[row1+8+c]*wx2 + s[row1+12+c]*wx3;
+          const c2 = s[row2+c]*wx0 + s[row2+4+c]*wx1 + s[row2+8+c]*wx2 + s[row2+12+c]*wx3;
+          const c3 = s[row3+c]*wx0 + s[row3+4+c]*wx1 + s[row3+8+c]*wx2 + s[row3+12+c]*wx3;
+          const val = c0*wy0 + c1*wy1 + c2*wy2 + c3*wy3;
+          o[oi+c] = val < 0 ? 0 : val > 255 ? 255 : val;
+        }
+      } else {
+        const cx = Math.min(Wm1 - 0.001, Math.max(0, sx)), cy = Math.min(Hm1 - 0.001, Math.max(0, sy));
+        const x0 = cx | 0, y0 = cy | 0, fx = cx - x0, fy = cy - y0;
+        const i00 = (y0*W + x0)*4, i10 = i00 + 4, i01 = i00 + W*4, i11 = i01 + 4;
+        for (let c = 0; c < 3; c++){
+          const top = s[i00+c] + (s[i10+c] - s[i00+c])*fx;
+          const bot = s[i01+c] + (s[i11+c] - s[i01+c])*fx;
+          o[oi+c] = top + (bot - top)*fy;
+        }
+      }
+      o[oi+3] = 255;
+    }
+  }
+  return out;
+}
+
+// 算法 4：O(N) 积分图快速均值模糊（支持小半径 USM 锐化掩模与大半径背景光场估计）
+function boxBlur(src, w, h, r){
+  const I = new Float64Array((w+1)*(h+1));
+  for (let y = 1; y <= h; y++){
+    let row = 0;
+    for (let x = 1; x <= w; x++){
+      row += src[(y-1)*w + x-1];
+      I[y*(w+1)+x] = I[(y-1)*(w+1)+x] + row;
+    }
+  }
+  const out = new Float32Array(w*h);
+  for (let y = 0; y < h; y++){
+    const y0 = Math.max(0, y-r), y1 = Math.min(h, y+r+1);
+    for (let x = 0; x < w; x++){
+      const x0 = Math.max(0, x-r), x1 = Math.min(w, x+r+1);
+      const sum = I[y1*(w+1)+x1] - I[y0*(w+1)+x1] - I[y1*(w+1)+x0] + I[y0*(w+1)+x0];
+      out[y*w+x] = sum / ((x1-x0)*(y1-y0));
+    }
+  }
+  return out;
+}
+
+// 算法 5：USM 非锐化掩模文字锐化 + 纸底色阶漂白 + Sauvola 抗锯齿局部二值化
+function enhance(img, cfg){
+  if (S.compareRaw) return img;
+  const { width: w, height: h, data: p } = img, n = w*h;
+  const gray = new Float32Array(n);
+  for (let i = 0, j = 0; i < n; i++, j += 4) gray[i] = 0.299*p[j] + 0.587*p[j+1] + 0.114*p[j+2];
+
+  // 1) USM 锐化高频分量提取（半径 r=2 的局部均值差分）
+  const sharpAmt = (cfg.sharpen || 0) / 100 * 1.85;
+  const fineBlur = sharpAmt > 0 ? boxBlur(gray, w, h, 2) : null;
+
+  // 2) 大窗口背景光场估计
+  const needBg = cfg.mode === 'bw' || (cfg.mode !== 'raw' && cfg.shadow > 0);
+  const bg = needBg ? boxBlur(gray, w, h, Math.max(12, Math.round(Math.max(w, h) / (cfg.mode === 'bw' ? 36 : 20)))) : null;
+
+  const sh = cfg.shadow / 100, ct = cfg.contrast / 100, br = cfg.brightness * 2;
+  const T = cfg.threshold / 100, t = cfg.tint / 100;
+  const tint = [1 - 0.02*t, 1 - 0.05*t, 1 - 0.14*t];
+  const nz = cfg.noise;
+  const cl = v => v < 0 ? 0 : v > 255 ? 255 : v;
+
+  for (let i = 0, j = 0; i < n; i++, j += 4){
+    // USM 高频边缘增益
+    const detail = fineBlur ? (gray[i] - fineBlur[i]) * sharpAmt : 0;
+    const gSharp = cl(gray[i] + detail);
+
+    let r, g, b;
+    if (cfg.mode === 'bw'){
+      // 改进型自适应软阈值二值化：笔画黑度扎实且边缘平滑无锯齿
+      const th = bg[i] * (1 - T);
+      const v = cl((gSharp - th) * 255 / (bg[i]*0.055 + 1) + br);
+      r = g = b = v;
+    } else {
+      let f = 1;
+      if (bg){
+        // 光照除法归一化 + 纸底高亮区平滑推白（消除灰雾底色）
+        f = 1 + (250 / Math.max(bg[i], 1) - 1) * sh;
+      }
+      if (cfg.mode === 'gray'){
+        let v = gSharp * f;
+        if (sh > 0.5 && v > 210) v = 210 + (v - 210) * 1.45; // 纸底漂白曲线
+        r = g = b = (v - 128) * ct + 128 + br;
+      } else {
+        r = (p[j] + detail) * f;
+        g = (p[j+1] + detail) * f;
+        b = (p[j+2] + detail) * f;
+        if (cfg.mode === 'enhance'){
+          const m = (r + g + b) / 3;
+          // 提纯白色纸底、加深深色字迹并保留红章鲜艳度
+          if (m > 208 && Math.max(r,g,b) - Math.min(r,g,b) < 28){
+            const wb = Math.min(1, (m - 208) / 38) * sh;
+            r = r*(1-wb) + 255*wb; g = g*(1-wb) + 255*wb; b = b*(1-wb) + 255*wb;
+          } else {
+            r = m + (r - m)*1.22; g = m + (g - m)*1.22; b = m + (b - m)*1.22;
+          }
+        }
+        r = (r - 128)*ct + 128 + br;
+        g = (g - 128)*ct + 128 + br;
+        b = (b - 128)*ct + 128 + br;
+      }
+    }
+    if (nz){ const e = (Math.random() - 0.5) * nz * 2; r += e; g += e; b += e; }
+    p[j] = cl(r*tint[0]); p[j+1] = cl(g*tint[1]); p[j+2] = cl(b*tint[2]);
+  }
+  return img;
+}
+
+// 算法 6：物理扫描仪微倾斜与光学模糊合成
+function compose(img, cfg){
+  const c1 = document.createElement('canvas');
+  c1.width = img.width; c1.height = img.height;
+  c1.getContext('2d').putImageData(img, 0, 0);
+  if (S.compareRaw || (!cfg.tilt && !cfg.blur)) return c1;
+  const c2 = document.createElement('canvas');
+  c2.width = img.width; c2.height = img.height;
+  const g = c2.getContext('2d'), t = cfg.tint / 100;
+  g.imageSmoothingEnabled = true;
+  g.imageSmoothingQuality = 'high';
+  g.fillStyle = `rgb(${255*(1-0.02*t)},${255*(1-0.05*t)},${255*(1-0.14*t)})`;
+  g.fillRect(0, 0, c2.width, c2.height);
+  if (cfg.blur) g.filter = `blur(${cfg.blur}px)`;
+  g.translate(c2.width/2, c2.height/2);
+  g.rotate(cfg.tilt * Math.PI / 180);
+  g.drawImage(c1, -c1.width/2, -c1.height/2);
+  return c2;
+}
+
+function processPage(p, maxOut){ return compose(enhance(warp(p, maxOut, p.cfg), p.cfg), p.cfg); }
+
+let timer = null;
+function scheduleProcess(immediate){
+  clearTimeout(timer);
+  const run = () => {
+    const box = $('#preview'); box.innerHTML = '';
+    const p = S.pages[S.cur];
+    if (!p){ $('#info').textContent = '—'; return; }
+    const t0 = performance.now();
+    // 拖拽控制点过程中使用 1300px 保证 60fps 丝滑跟手，松手后立即渲染 2200px 超清画面
+    const resLimit = dragIdx >= 0 ? 1300 : PREVIEW_MAX;
+    const c = processPage(p, resLimit);
+    box.appendChild(c);
+    const ms = Math.round(performance.now() - t0);
+    $('#info').textContent = S.compareRaw ? `仅展平未增强 (${c.width}×${c.height})` : `${c.width}×${c.height} px · ${ms} ms`;
+  };
+  if (immediate) run(); else timer = setTimeout(run, 25);
+}
+
+/* ====================== 8. 超清 PNG 与 300DPI 多页 PDF 导出 ====================== */
+function baseName(){ const p = S.pages[S.cur]; return (p ? p.name.replace(/\.[^.]+$/, '') : 'scan') + '_超清扫描件'; }
+$('#btnPng').onclick = () => {
+  const p = S.pages[S.cur]; if (!p) return;
+  processPage(p, EXPORT_MAX).toBlob(b => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(b); a.download = baseName() + '.png'; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    toast('3200px 超清 PNG 已导出');
+  }, 'image/png');
+};
+
+$('#btnPdf').onclick = async () => {
+  if (!window.jspdf){ toast('jsPDF 库未就绪（需联网），请先使用导出超清 PNG'); return; }
+  const btn = $('#btnPdf'), span = btn.querySelector('span');
+  btn.disabled = true;
+  let pdf = null;
+  for (let i = 0; i < S.pages.length; i++){
+    span.textContent = `超清合成 ${i+1}/${S.pages.length}...`;
+    await new Promise(r => setTimeout(r, 15));
+    const page = S.pages[i];
+    const c = processPage(page, EXPORT_MAX);
+    const isLand = c.width > c.height;
+    const orient = isLand ? 'l' : 'p';
+    const PW = isLand ? 297 : 210, PH = isLand ? 210 : 297;
+    if (!pdf) pdf = new window.jspdf.jsPDF({ orientation: orient, unit:'mm', format:'a4', compress:true });
+    else pdf.addPage('a4', orient);
+    const k = Math.min(PW / c.width, PH / c.height);
+    const w = c.width * k, h = c.height * k;
+    const q = parseFloat(page.cfg.quality || '0.96');
+    pdf.addImage(c.toDataURL('image/jpeg', q), 'JPEG', (PW - w)/2, (PH - h)/2, w, h);
+  }
+  pdf.save(baseName() + '.pdf');
+  span.textContent = '导出多页 PDF'; btn.disabled = false;
+  toast(`超清 PDF 导出完成，共 ${S.pages.length} 页`);
+};
+</script>
+</body>
+</html>
