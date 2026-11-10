@@ -98,6 +98,7 @@ ScanLite/
 ├── index.html      # ScanLite Pro 完整单文件应用程序（UI + 视觉算法引擎）
 ├── 设计方案.md      # 算法原理、数学公式推导与技术架构设计文档
 ├── ScanLite.ico    # 多图层高清桌面图标（256x256 & 64x64）
+├── LICENSE         # MIT 开源许可证
 └── README.md       # 项目说明文档与中英文简介
 ```
 
@@ -105,4 +106,4 @@ ScanLite/
 
 ## 📄 开源协议（License）
 
-本项目基于 [MIT License](https://opensource.org/licenses/MIT) 开源，欢迎自由使用、修改与分享。
+本项目基于 [MIT License](./LICENSE) 开源，欢迎自由使用、修改与分享。
